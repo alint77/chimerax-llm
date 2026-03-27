@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<BundleInfo name="ChimeraX-ChimeraLLM" version="0.1.0" package="chimerallm" minSessionVersion="1" maxSessionVersion="1">
+  <Author>ChimeraLLM</Author>
+  <Email>chimerallm@local</Email>
+  <URL>https://www.rbvi.ucsf.edu/chimerax/</URL>
+  <Synopsis>Natural language LLM agent for ChimeraX (OpenAI-compatible API)</Synopsis>
+  <Description>
+    ChimeraLLM provides a chat panel that uses an LLM with function-calling to plan
+    and execute ChimeraX commands from natural language prompts.
+  </Description>
+  <Categories>
+    <Category name="General"/>
+  </Categories>
+  <Dependencies>
+    <Dependency name="ChimeraX-Core" version="~=1.1"/>
+    <Dependency name="ChimeraX-UI" version="~=1.0"/>
+    <Dependency name="openai" version=">=1.0"/>
+  </Dependencies>
+  <Classifiers>
+    <ChimeraXClassifier>ChimeraX :: Tool :: ChimeraLLM :: General :: Natural language agent for ChimeraX</ChimeraXClassifier>
+    <ChimeraXClassifier>ChimeraX :: Command :: chimerallm :: General :: Open ChimeraLLM or send a prompt</ChimeraXClassifier>
+  </Classifiers>
+  <DataFiles package="chimerallm">
+    <DataDir>docs</DataDir>
+  </DataFiles>
+</BundleInfo>
