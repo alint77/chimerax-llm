@@ -2,6 +2,12 @@
 
 ChimeraX bundle that turns natural language into ChimeraX commands using an LLM agent. Supports any OpenAI-compatible API (OpenRouter, OpenAI, etc.) or [opencode](https://github.com/anomalyco/opencode) for zero-cost usage via GitHub Copilot.
 
+## Screenshot
+
+![ChimeraX with ChimeraLLM: structure viewport and chat panel with a multi-step prompt](docs/images/chimerallm-screenshot.png)
+
+**ChimeraLLM** (dock on the right) shows the chat log, running commands, and a **multi-line prompt** (use **Enter** for a new line; **Ctrl+Enter** or **Send** to submit). The 3D view shows the structure after the agent executes your instructions (here: PDB 1a6m, surfaces, hydrophobicity coloring, and cross-section).
+
 ## Prerequisites
 
 - **ChimeraX** 1.1 or newer (graphical interface; does not run in `--nogui` mode).
@@ -114,7 +120,7 @@ Available GitHub Copilot models include Claude (Sonnet, Opus, Haiku), GPT-4o/5, 
   chimerallm fetch 1ubq and color it by secondary structure
   ```
 
-Type natural language requests in the chat panel. The agent will call ChimeraX commands, inspect session state, and reply with results.
+Type natural language in the **prompt area** at the bottom of the panel. It supports **multiple lines**; press **Enter** for a new line and **Ctrl+Enter** (or **Send**) to submit. The agent runs ChimeraX commands, can read session state, and shows command output in the chat.
 
 ## Updating
 
