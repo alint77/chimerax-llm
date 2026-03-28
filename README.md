@@ -48,39 +48,47 @@ ChimeraX bundle that turns natural language into ChimeraX commands using an LLM 
 
 ## Configuration
 
-Open the **ChimeraLLM** tool, click **Settings**, and configure one of the two backends:
+Open the **ChimeraLLM** tool, click **Settings**, and use the **OpenAI-compatible API** or **GitHub Copilot** tab. The active tab is the backend used for chat (you can switch anytime and save).
 
-### Option A: OpenAI-compatible API
+### Tab: OpenAI-compatible API
 
 | Setting | Description |
 |---|---|
-| **API endpoint URL** | Leave empty for OpenRouter (`https://openrouter.ai/api/v1`), or enter any OpenAI-compatible endpoint |
+| **API endpoint URL** | Leave empty for OpenRouter (`https://openrouter.ai/api/v1`), or enter any OpenAI-compatible base URL |
 | **API key** | Your API key for the chosen endpoint |
-| **Model** | Model identifier (default: `gpt-4o`) |
+| **Model** | Model identifier (default: `gpt-4o`). Use **Refresh models** to load IDs from the provider (`GET /v1/models`) using the URL and key above; models also load on open when a key is saved |
 | **Temperature** | Sampling temperature, 0.0 - 2.0 (default: 0.2) |
+| **Refresh models** | Fetches the model list from the API and fills the dropdown |
 
-### Option B: GitHub Copilot
+### Tab: GitHub Copilot
 
-Check **"Use GitHub Copilot instead of API"** in Settings. This calls the Copilot API directly with native tool calling — no API key or separate billing needed. Each user prompt costs exactly **one premium request** regardless of how many tool-calling rounds the agent takes (follow-up rounds are tagged `x-initiator: agent` and are not billed, matching the approach used by [opencode](https://github.com/sst/opencode)).
+This calls the Copilot API directly with native tool calling — no API key or separate billing beyond Copilot. Each user prompt costs exactly **one premium request** regardless of how many tool-calling rounds the agent takes (follow-up rounds use `x-initiator: agent` and are not billed as premium, matching [opencode](https://github.com/sst/opencode)).
 
 | Setting | Description |
 |---|---|
-| **Model** | Pick from the dropdown (GPT-4o, GPT-4.1, Claude Sonnet 4, Gemini 2.5 Pro, etc.) or type any model ID |
-| **Login with GitHub** | Click to authenticate via GitHub device flow (one-time setup) |
+| **Model** | Pick from the dropdown or type a model ID. Use **Refresh models** to reload IDs from the public model registry (after signing in, refresh again if needed) |
+| **Sign in with GitHub…** | GitHub device flow (one-time setup) |
 
-Available models include GPT-4o, GPT-4.1, GPT-5-mini, Claude Sonnet 4/4.5/4.6, Gemini 2.5 Pro, and o4-mini. Some models like GPT-4.1, GPT-4o, and GPT-5-mini are available at no extra cost beyond your Copilot subscription.
+Typical registry entries include GPT-4o, GPT-4.1, GPT-5-mini, Claude Sonnet 4.x, Gemini 2.5 Pro, and o4-mini; availability depends on your Copilot plan.
 
-**Max iterations** (shared setting) controls how many tool-calling rounds the agent can take per message (default: 10).
+### Shared options (below the tabs)
+
+| Setting | Description |
+|---|---|
+| **Write ChimeraLLM messages to the ChimeraX log** | When enabled (default), ChimeraLLM writes lines such as LLM requests and settings notices to the ChimeraX log. Turn off to keep the log quiet |
+| **Max tool rounds per message** | Maximum tool-calling rounds per user message (default: 10) |
+
+While the assistant is working, a **rotating indicator** and status text appear above the prompt area.
 
 ## GitHub Copilot setup
 
 1. Open **ChimeraLLM Settings** in ChimeraX.
-2. Check **"Use GitHub Copilot instead of API"**.
-3. Click **"Login with GitHub"**.
-4. A dialog will show a URL and a one-time code — open the URL in your browser and enter the code.
-5. Once authorized, the status will show "Logged in". Pick a model and save.
+2. Open the **GitHub Copilot** tab.
+3. Click **Sign in with GitHub…**.
+4. A dialog shows a URL and a one-time code — open the URL in your browser and enter the code.
+5. When authorized, **Status** shows **Signed in to GitHub**. Use **Refresh models** if needed, pick a model, and click **OK**.
 
-If you've previously authenticated with [opencode](https://github.com/anomalyco/opencode), the plugin will automatically reuse that token (stored in `~/.local/share/opencode/auth.json`).
+If you've previously authenticated with [opencode](https://github.com/anomalyco/opencode), the plugin can reuse that token (see `~/.local/share/opencode/auth.json` when applicable).
 
 ## Usage
 
@@ -97,7 +105,7 @@ If you've previously authenticated with [opencode](https://github.com/anomalyco/
   chimerallm fetch 1ubq and color it by secondary structure
   ```
 
-Type natural language in the **prompt area** at the bottom of the panel. It supports **multiple lines**; press **Enter** for a new line and **Ctrl+Enter** (or **Send**) to submit. The agent runs ChimeraX commands, can read session state, and shows command output in the chat.
+Type natural language in the **prompt area** at the bottom of the panel. It supports **multiple lines**; press **Enter** for a new line and **Ctrl+Enter** (or **Send**) to submit. The agent runs ChimeraX commands, can read session state, and streams the assistant reply in the chat while tool calls and command output appear as they run. Use **Cancel** to stop a long request.
 
 ## Updating
 
