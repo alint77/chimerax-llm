@@ -1,6 +1,6 @@
 # chimerax-llm
 
-ChimeraX bundle that turns natural language into ChimeraX commands using an LLM agent. Supports any OpenAI-compatible API (OpenRouter, OpenAI, etc.) or [opencode](https://github.com/anomalyco/opencode) for zero-cost usage via GitHub Copilot.
+ChimeraX bundle that turns natural language into ChimeraX commands using an LLM agent. Supports any OpenAI-compatible API (OpenRouter, OpenAI, etc.) or GitHub Copilot directly (included with your Copilot subscription).
 
 ## Screenshot
 
@@ -17,9 +17,9 @@ ChimeraX bundle that turns natural language into ChimeraX commands using an LLM 
 - An **API key** for an OpenAI-compatible service.
 - The bundle declares a dependency on the Python **`openai`** package; ChimeraX should install it automatically. If you see import errors, run `devel pip install openai` from the ChimeraX command line and restart.
 
-**For opencode mode (free via GitHub Copilot):**
-- **opencode** CLI installed and authenticated (see [opencode setup](#opencode-setup) below).
-- A **GitHub Copilot** subscription (individual, business, or enterprise).
+**For GitHub Copilot mode:**
+- A **GitHub Copilot** subscription (Free, Pro, Pro+, Business, or Enterprise).
+- No external tools needed — authentication is handled directly in the plugin.
 
 ## Install from source
 
@@ -59,51 +59,28 @@ Open the **ChimeraLLM** tool, click **Settings**, and configure one of the two b
 | **Model** | Model identifier (default: `gpt-4o`) |
 | **Temperature** | Sampling temperature, 0.0 - 2.0 (default: 0.2) |
 
-### Option B: opencode (GitHub Copilot)
+### Option B: GitHub Copilot
 
-Check **"Use opencode instead of API"** in Settings. This routes all LLM calls through the opencode CLI, which connects to your GitHub Copilot subscription — no API key or billing needed.
+Check **"Use GitHub Copilot instead of API"** in Settings. This calls the Copilot API directly with native tool calling — no API key or separate billing needed. Each user prompt costs exactly **one premium request** regardless of how many tool-calling rounds the agent takes (follow-up rounds are tagged `x-initiator: agent` and are not billed, matching the approach used by [opencode](https://github.com/sst/opencode)).
 
 | Setting | Description |
 |---|---|
-| **opencode model** | Pick from the dropdown or type a model ID. Click **Refresh models** to fetch available models from opencode. |
+| **Model** | Pick from the dropdown (GPT-4o, GPT-4.1, Claude Sonnet 4, Gemini 2.5 Pro, etc.) or type any model ID |
+| **Login with GitHub** | Click to authenticate via GitHub device flow (one-time setup) |
 
-Available GitHub Copilot models include Claude (Sonnet, Opus, Haiku), GPT-4o/5, Gemini, Grok, and more. Notably, GitHub Copilot provides free-tier access to models like GPT-4.1, GPT-4o, and GPT-5-mini at no additional cost beyond your Copilot subscription. opencode also offers its own free community models.
+Available models include GPT-4o, GPT-4.1, GPT-5-mini, Claude Sonnet 4/4.5/4.6, Gemini 2.5 Pro, and o4-mini. Some models like GPT-4.1, GPT-4o, and GPT-5-mini are available at no extra cost beyond your Copilot subscription.
 
 **Max iterations** (shared setting) controls how many tool-calling rounds the agent can take per message (default: 10).
 
-## opencode setup
+## GitHub Copilot setup
 
-1. **Install opencode** (requires Node.js 18+):
+1. Open **ChimeraLLM Settings** in ChimeraX.
+2. Check **"Use GitHub Copilot instead of API"**.
+3. Click **"Login with GitHub"**.
+4. A dialog will show a URL and a one-time code — open the URL in your browser and enter the code.
+5. Once authorized, the status will show "Logged in". Pick a model and save.
 
-   ```bash
-   npm i -g opencode-ai
-   ```
-
-   Or via Homebrew:
-
-   ```bash
-   brew install opencode-ai/tap/opencode
-   ```
-
-2. **Authenticate with GitHub Copilot:**
-
-   ```bash
-   opencode
-   ```
-
-   On first run, opencode will prompt you to log in via GitHub OAuth. Follow the device code flow to authorize.
-
-3. **Verify it works:**
-
-   ```bash
-   opencode models github-copilot
-   ```
-
-   You should see a list of available models. If not, re-run `opencode` and complete the login flow.
-
-4. In ChimeraX, open **ChimeraLLM Settings**, check **"Use opencode instead of API"**, click **Refresh models**, pick a model, and save.
-
-> **Note:** ChimeraX launches as a macOS GUI app and may not inherit your shell's PATH. The plugin searches common install locations (`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`) automatically. If opencode still isn't found, you can create a symlink: `sudo ln -s $(which opencode) /usr/local/bin/opencode`
+If you've previously authenticated with [opencode](https://github.com/anomalyco/opencode), the plugin will automatically reuse that token (stored in `~/.local/share/opencode/auth.json`).
 
 ## Usage
 
@@ -134,4 +111,3 @@ See [architecture.md](architecture.md) for a detailed overview of the codebase, 
 
 - ChimeraX `devel install` options: [Command: devel](https://rbvi.ucsf.edu/chimerax/docs/user/commands/devel.html)
 - Bundle development overview: [Building and distributing bundles](https://www.cgl.ucsf.edu/chimerax/docs/devel/writing_bundles.html)
-- opencode documentation: [github.com/anomalyco/opencode](https://github.com/anomalyco/opencode)
