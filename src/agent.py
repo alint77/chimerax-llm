@@ -1,13 +1,10 @@
 # vim: set expandtab shiftwidth=4 softtabstop=4:
 
-"""LLM tool-calling agent loop for ChimeraX (OpenAI-compatible API + opencode)."""
+"""LLM tool-calling agent loop for ChimeraX (OpenAI-compatible API + GitHub Copilot)."""
 
 from __future__ import annotations
 
 import json
-import os
-import re
-import subprocess
 from typing import Any, Callable, Dict, List, Optional
 
 from chimerallm.system_prompt import SYSTEM_PROMPT
@@ -17,33 +14,20 @@ def _log_llm_request(
     session,
     *,
     model: str,
-    via_opencode: bool,
+    via_copilot: bool,
     this_call_chars: int,
-    seed_with_system_chars: Optional[int] = None,
 ) -> None:
     """Log each outbound LLM request with model, route, and context size estimates.
-
-    * API route: ``this_call_chars`` is the JSON size of messages (includes system prompt).
-    * opencode route: ``this_call_chars`` is the string length sent this subprocess call;
-      ``seed_with_system_chars`` is ``len(initial_prompt)`` (system prompt + tool protocol
-      + user transcript) so logs stay meaningful when later rounds only send short continuations.
 
     The agent runs on a worker thread; ChimeraX's logger/GUI is not thread-safe, so we
     marshal logging onto the UI thread via session.ui.thread_safe when in GUI mode.
     """
-    route = "opencode" if via_opencode else "api"
-    if seed_with_system_chars is not None:
-        msg = (
-            "ChimeraLLM LLM request: model=%s route=%s this_call_chars=%d "
-            "full_seed_with_system_chars=%d"
-            % (model, route, this_call_chars, seed_with_system_chars)
-        )
-    else:
-        msg = (
-            "ChimeraLLM LLM request: model=%s route=%s request_chars=%d "
-            "(serialized messages including system prompt)"
-            % (model, route, this_call_chars)
-        )
+    route = "copilot" if via_copilot else "api"
+    msg = (
+        "ChimeraLLM LLM request: model=%s route=%s request_chars=%d "
+        "(serialized messages including system prompt)"
+        % (model, route, this_call_chars)
+    )
 
     def _do_log():
         session.logger.info(msg)
@@ -62,29 +46,6 @@ def _messages_context_chars(messages: List[Dict[str, Any]]) -> int:
     """Serialized size of the message list (approximate context for API calls)."""
     return len(json.dumps(messages, default=str))
 
-
-# Extra instructions appended to the system prompt when using opencode (text-based tool calling).
-_OPENCODE_TOOL_INSTRUCTIONS = """
-
-## Tool-calling protocol
-You do NOT have native function-calling. Instead, output tool calls using the exact XML tag format below.
-Each tool call must be on its own line(s):
-
-<tool_call>{"name": "TOOL_NAME", "arguments": {ARGS}}</tool_call>
-
-Available tools:
-1. execute_chimerax_command – Run one or more ChimeraX commands (separate with semicolons).
-   Arguments: {"command": "the command string"}
-2. get_session_info – Get a summary of open models, selection, and session state.
-   Arguments: {}
-3. log_message – Show a short status note to the user.
-   Arguments: {"message": "text"}
-
-Rules:
-- You may include multiple <tool_call> tags in a single response.
-- After you output tool calls, STOP. The results will be provided in the next message so you can continue.
-- When you are done (no more tools needed), reply with your final text WITHOUT any <tool_call> tags.
-"""
 
 TOOLS: List[Dict[str, Any]] = [
     {
@@ -228,7 +189,7 @@ def run_agent(
         _log_llm_request(
             session,
             model=model,
-            via_opencode=False,
+            via_copilot=False,
             this_call_chars=_messages_context_chars(messages),
         )
         response = client.chat.completions.create(
@@ -301,7 +262,7 @@ def run_agent(
     _log_llm_request(
         session,
         model=model,
-        via_opencode=False,
+        via_copilot=False,
         this_call_chars=_messages_context_chars(messages),
     )
     response = client.chat.completions.create(
@@ -321,167 +282,81 @@ def _sync_api_messages(api_messages: List[Dict[str, Any]], messages_with_system:
 
 
 # ---------------------------------------------------------------------------
-# opencode backend
+# GitHub Copilot backend (direct API via OpenAI SDK)
 # ---------------------------------------------------------------------------
 
-# Lenient regex: catches </tool_call>, </minimax:tool_call>, or any </..tool_call..> variant.
-_TOOL_CALL_RE = re.compile(
-    r"<tool_call>\s*(.*?)\s*</[\w:]*tool_call>",
-    re.DOTALL,
-)
-_KNOWN_TOOLS = {"execute_chimerax_command", "get_session_info", "log_message"}
+_COPILOT_BASE_URL = "https://api.githubcopilot.com"
+_COPILOT_HEADERS = {
+    "User-Agent": "ChimeraLLM/0.1",
+    "Openai-Intent": "conversation-edits",
+}
+
+# Fallback list used when models.dev is unreachable.
+_COPILOT_MODELS_FALLBACK: List[str] = [
+    "gpt-4o",
+    "gpt-4.1",
+    "gpt-5-mini",
+    "claude-sonnet-4",
+    "gemini-2.5-pro",
+]
 
 
-def _find_opencode() -> str:
-    """Locate the opencode binary, searching common paths if needed."""
-    import shutil
+def fetch_copilot_models() -> List[str]:
+    """Fetch available GitHub Copilot model IDs from the models.dev registry."""
+    import urllib.request
+    import urllib.error
 
-    path = shutil.which("opencode")
-    if path:
-        return path
-    # macOS GUI apps often lack Homebrew / nvm paths
-    for candidate in (
-        "/opt/homebrew/bin/opencode",
-        "/usr/local/bin/opencode",
-        os.path.expanduser("~/.local/bin/opencode"),
-        os.path.expanduser("~/.nvm/versions/node/default/bin/opencode"),
-    ):
-        if os.path.isfile(candidate):
-            return candidate
-    raise FileNotFoundError(
-        "Could not find 'opencode'. Make sure it is installed "
-        "(npm i -g opencode-ai) and on your PATH."
-    )
-
-
-def _parse_tool_calls(text: str) -> List[Dict[str, Any]]:
-    """Extract tool-call dicts from assistant text (lenient)."""
-    calls: List[Dict[str, Any]] = []
-
-    # 1) Try structured regex (<tool_call>...</tool_call> and mangled variants)
-    for m in _TOOL_CALL_RE.finditer(text):
-        raw = (m.group(1) or "").strip()
-        if not raw:
-            continue
-        try:
-            obj = json.loads(raw)
-            if isinstance(obj, dict) and "name" in obj:
-                calls.append(obj)
-                continue
-        except json.JSONDecodeError:
-            pass
-        # Model may have added junk around the JSON — extract innermost braces
-        brace_start = raw.find("{")
-        brace_end = raw.rfind("}")
-        if brace_start != -1 and brace_end > brace_start:
-            try:
-                obj = json.loads(raw[brace_start : brace_end + 1])
-                if isinstance(obj, dict) and "name" in obj:
-                    calls.append(obj)
-            except json.JSONDecodeError:
-                pass
-
-    # 2) Fallback: find bare {"name": "known_tool", ...} JSON in the text
-    #    (handles models that mangle or omit delimiters entirely)
-    if not calls:
-        for m in re.finditer(r'\{\s*"name"\s*:', text):
-            start = m.start()
-            depth = 0
-            end = start
-            for i in range(start, len(text)):
-                if text[i] == "{":
-                    depth += 1
-                elif text[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        end = i + 1
-                        break
-            try:
-                obj = json.loads(text[start:end])
-                if isinstance(obj, dict) and obj.get("name") in _KNOWN_TOOLS:
-                    calls.append(obj)
-            except json.JSONDecodeError:
-                pass
-
-    return calls
-
-
-def _strip_tool_calls(text: str) -> str:
-    """Return text with tool-call blocks removed."""
-    cleaned = _TOOL_CALL_RE.sub("", text)
-    # Also strip bare tool-call JSON that the fallback parser would match
-    cleaned = re.sub(
-        r'\{\s*"name"\s*:\s*"(?:execute_chimerax_command|get_session_info|log_message)"[^}]*(?:\{[^}]*\}[^}]*)?\}',
-        "", cleaned,
-    )
-    return cleaned.strip()
-
-
-def _call_opencode(prompt: str, model: str, session_id: Optional[str] = None) -> tuple:
-    """Call ``opencode run`` and return (response_text, session_id)."""
-    oc = _find_opencode()
-    cmd = [oc, "run", "--model", model, "--format", "json"]
-    if session_id:
-        cmd += ["--session", session_id]
-    cmd.append(prompt)
-
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-
-    text_parts: List[str] = []
-    sid = session_id
-    for line in result.stdout.strip().split("\n"):
-        if not line:
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if sid is None:
-            sid = event.get("sessionID")
-        etype = event.get("type")
-        if etype == "text":
-            part = event.get("part", {})
-            text_parts.append(part.get("text", ""))
-
-    return "".join(text_parts), sid
-
-
-def fetch_opencode_models() -> List[str]:
-    """Return the list of model IDs from ``opencode models``."""
     try:
-        oc = _find_opencode()
-        result = subprocess.run(
-            [oc, "models"],
-            capture_output=True, text=True, timeout=15,
+        req = urllib.request.Request(
+            "https://models.dev/api.json",
+            headers={"User-Agent": "ChimeraLLM/0.1"},
         )
-        models = [l.strip() for l in result.stdout.strip().split("\n") if l.strip()]
-        return models if models else []
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        provider = data.get("github-copilot", {})
+        models = provider.get("models", {})
+        return sorted(models.keys()) if models else _COPILOT_MODELS_FALLBACK
     except Exception:
-        return []
+        return _COPILOT_MODELS_FALLBACK
 
 
-def run_agent_opencode(
+def run_agent_copilot(
     session,
     api_messages: List[Dict[str, Any]],
     settings,
     callbacks: AgentCallbacks,
 ) -> str:
-    """Run one assistant turn via the opencode CLI."""
-    model = getattr(settings, "opencode_model", "github-copilot/claude-sonnet-4") or "github-copilot/claude-sonnet-4"
+    """Run one assistant turn via the GitHub Copilot API (native tool calling)."""
+    try:
+        from openai import OpenAI
+    except ImportError as e:
+        raise RuntimeError(
+            "The 'openai' package is required. Reinstall the bundle or: pip install openai"
+        ) from e
+
+    from chimerallm.copilot_auth import get_token
+
+    token = get_token()
+    if not token:
+        raise RuntimeError(
+            "No Copilot token found. Click 'Login with GitHub' in ChimeraLLM Settings."
+        )
+
+    client = OpenAI(
+        api_key=token,
+        base_url=_COPILOT_BASE_URL,
+        default_headers=_COPILOT_HEADERS,
+    )
+
+    model = getattr(settings, "copilot_model", "gpt-4o") or "gpt-4o"
     max_iterations = int(getattr(settings, "max_iterations", 10))
 
-    system = SYSTEM_PROMPT + _OPENCODE_TOOL_INSTRUCTIONS
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        *api_messages,
+    ]
 
-    # Build the initial prompt: system context + full conversation history
-    parts: List[str] = [system, ""]
-    for msg in api_messages:
-        role = msg["role"].upper()
-        parts.append(f"[{role}]: {msg['content']}")
-    initial_prompt = "\n".join(parts)
-
-    session_id: Optional[str] = None
     final_text = ""
-    prompt = initial_prompt
 
     for iteration in range(max_iterations):
         if callbacks.on_iteration:
@@ -490,57 +365,87 @@ def run_agent_opencode(
         _log_llm_request(
             session,
             model=model,
-            via_opencode=True,
-            this_call_chars=len(prompt),
-            seed_with_system_chars=len(initial_prompt),
+            via_copilot=True,
+            this_call_chars=_messages_context_chars(messages),
         )
-        response_text, session_id = _call_opencode(prompt, model, session_id)
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=TOOLS,
+            tool_choice="auto",
+        )
 
-        tool_calls = _parse_tool_calls(response_text)
-        clean_text = _strip_tool_calls(response_text)
+        msg = response.choices[0].message
 
-        if clean_text and callbacks.on_assistant_delta:
-            callbacks.on_assistant_delta(clean_text)
+        if msg.content:
+            final_text = msg.content
+            if callbacks.on_assistant_delta:
+                callbacks.on_assistant_delta(msg.content)
 
-        if not tool_calls:
-            # No tool calls → final answer
-            final_text = clean_text or response_text
-            api_messages.append({"role": "assistant", "content": final_text})
-            return final_text
+        if not msg.tool_calls:
+            messages.append({"role": "assistant", "content": msg.content})
+            _sync_api_messages(api_messages, messages)
+            return msg.content or final_text or ""
 
-        # Execute each tool call
-        result_parts: List[str] = []
-        for tc in tool_calls:
-            name = tc.get("name", "")
-            args = tc.get("arguments", {})
+        assistant_msg: Dict[str, Any] = {"role": "assistant", "content": msg.content}
+        assistant_msg["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments or "{}",
+                },
+            }
+            for tc in msg.tool_calls
+        ]
+        messages.append(assistant_msg)
+
+        for tc in msg.tool_calls:
+            fname = tc.function.name
             try:
-                if name == "execute_chimerax_command":
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                result = "Error: invalid JSON in tool arguments"
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+                continue
+
+            try:
+                if fname == "execute_chimerax_command":
                     cmd = args.get("command", "")
                     result = callbacks.execute_chimerax_command(cmd)
-                elif name == "get_session_info":
+                elif fname == "get_session_info":
                     result = callbacks.get_session_info()
-                elif name == "log_message":
+                elif fname == "log_message":
                     callbacks.log_message(args.get("message", ""))
                     result = "Message shown to user."
                 else:
-                    result = f"Unknown tool: {name}"
+                    result = f"Unknown tool {fname}"
             except Exception as e:
-                result = f"Error executing {name}: {e}"
-            result_parts.append(f"[Tool {name}] {result[:8000]}")
+                result = f"Error executing tool {fname}: {e}"
 
-        # Send tool results back via session continuation
-        prompt = "Tool results:\n" + "\n".join(result_parts) + "\n\nContinue. Use more tool calls if needed, or give your final answer."
+            messages.append(
+                {"role": "tool", "tool_call_id": tc.id, "content": result[:8000]}
+            )
 
-    # Max iterations exceeded – ask for summary
-    summary_prompt = "Stop calling tools. Briefly summarize what was done and what may still be needed."
+    messages.append(
+        {
+            "role": "user",
+            "content": "Stop calling tools. Briefly summarize what was done and what may still be needed.",
+        }
+    )
     _log_llm_request(
         session,
         model=model,
-        via_opencode=True,
-        this_call_chars=len(summary_prompt),
-        seed_with_system_chars=len(initial_prompt),
+        via_copilot=True,
+        this_call_chars=_messages_context_chars(messages),
     )
-    response_text, _ = _call_opencode(summary_prompt, model, session_id)
-    final_text = _strip_tool_calls(response_text) or response_text
-    api_messages.append({"role": "assistant", "content": final_text})
+    response = client.chat.completions.create(
+        model=model,
+        messages=messages,
+    )
+    text = response.choices[0].message.content or ""
+    messages.append({"role": "assistant", "content": text})
+    final_text = text
+    _sync_api_messages(api_messages, messages)
     return final_text

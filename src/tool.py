@@ -213,39 +213,107 @@ class ChimeraLLMTool(ToolInstance):
         dlg.setWindowTitle("ChimeraLLM Settings")
         form = QFormLayout(dlg)
 
-        # --- opencode section ---
-        oc_group = QGroupBox("opencode (GitHub Copilot / local models)")
-        oc_layout = QFormLayout(oc_group)
+        # --- Copilot section ---
+        cp_group = QGroupBox("GitHub Copilot")
+        cp_layout = QFormLayout(cp_group)
 
-        oc_check = QCheckBox("Use opencode instead of API")
-        oc_check.setChecked(bool(self._prefs.use_opencode))
-        oc_layout.addRow(oc_check)
+        cp_check = QCheckBox("Use GitHub Copilot instead of API")
+        cp_check.setChecked(bool(self._prefs.use_copilot))
+        cp_layout.addRow(cp_check)
 
-        oc_model_combo = QComboBox()
-        oc_model_combo.setEditable(True)
-        oc_model_combo.setMinimumWidth(300)
-        # Populate with models from opencode CLI
-        saved_oc_model = self._prefs.opencode_model or "github-copilot/claude-sonnet-4"
-        oc_model_combo.addItem(saved_oc_model)
-        oc_model_combo.setCurrentText(saved_oc_model)
-        oc_layout.addRow("opencode model:", oc_model_combo)
+        cp_model_combo = QComboBox()
+        cp_model_combo.setEditable(True)
+        cp_model_combo.setMinimumWidth(300)
+        saved_cp_model = self._prefs.copilot_model or "gpt-4o"
+        # Start with saved model, fetch full list on demand
+        cp_model_combo.addItem(saved_cp_model)
+        cp_model_combo.setCurrentText(saved_cp_model)
+        cp_layout.addRow("Model:", cp_model_combo)
 
-        oc_refresh_btn = QPushButton("Refresh models")
-        oc_layout.addRow(oc_refresh_btn)
+        cp_refresh_btn = QPushButton("Refresh models")
+        cp_layout.addRow(cp_refresh_btn)
 
         def _refresh_models():
-            oc_model_combo.clear()
-            models = agent_mod.fetch_opencode_models()
-            if models:
-                oc_model_combo.addItems(models)
-                if saved_oc_model in models:
-                    oc_model_combo.setCurrentText(saved_oc_model)
-            else:
-                oc_model_combo.addItem("(could not fetch models)")
+            cp_model_combo.clear()
+            models = agent_mod.fetch_copilot_models()
+            cp_model_combo.addItems(models)
+            if saved_cp_model in models:
+                cp_model_combo.setCurrentText(saved_cp_model)
 
-        oc_refresh_btn.clicked.connect(_refresh_models)
+        cp_refresh_btn.clicked.connect(_refresh_models)
 
-        form.addRow(oc_group)
+        # Auth status + login button
+        from chimerallm.copilot_auth import get_token
+        has_token = get_token() is not None
+        cp_status = QLabel("Logged in" if has_token else "Not logged in")
+        cp_status.setStyleSheet("color: green;" if has_token else "color: #a00;")
+        cp_layout.addRow("Status:", cp_status)
+
+        cp_login_btn = QPushButton("Login with GitHub")
+        cp_layout.addRow(cp_login_btn)
+
+        def _do_login():
+            try:
+                from chimerallm.copilot_auth import start_device_flow, poll_for_token
+                flow = start_device_flow()
+                code = flow["user_code"]
+                url = flow["verification_uri"]
+
+                # Show the code to the user
+                from Qt.QtWidgets import QMessageBox
+                msg_box = QMessageBox(dlg)
+                msg_box.setWindowTitle("GitHub Login")
+                msg_box.setText(
+                    f"Open <b>{url}</b> in your browser and enter this code:\n\n"
+                    f"<h2>{code}</h2>\n\n"
+                    f"Waiting for authorization..."
+                )
+                msg_box.setStandardButtons(QMessageBox.StandardButton.Cancel)
+                msg_box.setModal(False)
+                msg_box.show()
+
+                # Poll in a thread so UI stays responsive
+                import threading
+                result_holder = [None, None]  # [token, error]
+
+                def _poll():
+                    try:
+                        token = poll_for_token(flow["device_code"], flow.get("interval", 5))
+                        result_holder[0] = token
+                    except Exception as e:
+                        result_holder[1] = str(e)
+
+                t = threading.Thread(target=_poll, daemon=True)
+                t.start()
+
+                # Use a timer to check completion
+                from Qt.QtCore import QTimer
+                timer = QTimer(dlg)
+
+                def _check():
+                    if t.is_alive():
+                        return
+                    timer.stop()
+                    msg_box.close()
+                    if result_holder[0]:
+                        cp_status.setText("Logged in")
+                        cp_status.setStyleSheet("color: green;")
+                        self.session.logger.info("GitHub Copilot login successful.")
+                    else:
+                        cp_status.setText("Login failed")
+                        cp_status.setStyleSheet("color: #a00;")
+                        self.session.logger.error(f"Copilot login failed: {result_holder[1]}")
+
+                timer.timeout.connect(_check)
+                timer.start(500)
+
+            except Exception as e:
+                cp_status.setText(f"Error: {e}")
+                cp_status.setStyleSheet("color: #a00;")
+
+        cp_login_btn.clicked.connect(_do_login)
+
+        form.addRow(cp_group)
 
         # --- API section ---
         api_group = QGroupBox("OpenAI-compatible API")
@@ -279,12 +347,12 @@ class ChimeraLLMTool(ToolInstance):
         iters.setValue(int(self._prefs.max_iterations))
         form.addRow("Max iterations:", iters)
 
-        # Toggle API group enabled based on opencode checkbox
+        # Toggle API group enabled based on Copilot checkbox
         def _toggle_api_group(checked):
             api_group.setEnabled(not checked)
 
-        oc_check.toggled.connect(_toggle_api_group)
-        _toggle_api_group(oc_check.isChecked())
+        cp_check.toggled.connect(_toggle_api_group)
+        _toggle_api_group(cp_check.isChecked())
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -296,8 +364,8 @@ class ChimeraLLMTool(ToolInstance):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
-        self._prefs.use_opencode = oc_check.isChecked()
-        self._prefs.opencode_model = oc_model_combo.currentText().strip() or "github-copilot/claude-sonnet-4"
+        self._prefs.use_copilot = cp_check.isChecked()
+        self._prefs.copilot_model = cp_model_combo.currentText().strip() or "gpt-4o"
         self._prefs.api_base_url = url_edit.text().strip()
         self._prefs.model = model_edit.text().strip() or "gpt-4o"
         self._prefs.temperature = float(temp.value())
@@ -364,8 +432,8 @@ class _AgentWorker(QThread):
                 log_message=log_ui,
             )
 
-            if self._tool._prefs.use_opencode:
-                reply = agent_mod.run_agent_opencode(
+            if self._tool._prefs.use_copilot:
+                reply = agent_mod.run_agent_copilot(
                     self._tool.session,
                     self._tool._api_messages,
                     self._tool._prefs,

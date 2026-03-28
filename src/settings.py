@@ -13,8 +13,8 @@ class ChimeraLLMSettings(Settings):
         "temperature": 0.2,
         "max_iterations": 10,
         "api_base_url": "",
-        "use_opencode": False,
-        "opencode_model": "github-copilot/claude-sonnet-4",
+        "use_copilot": False,
+        "copilot_model": "gpt-4o",
     }
     EXPLICIT_SAVE = {
         "api_key": "",

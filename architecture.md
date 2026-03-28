@@ -18,15 +18,13 @@ User prompt (natural language)
   | _AgentWorker     |  QThread — keeps UI responsive
   +--------+---------+
            |
-           +--- use_opencode=False ---> run_agent()       [OpenAI-compatible API]
-           |                             Uses native function-calling (tools param)
+           +--- use_copilot=False ---> run_agent()          [OpenAI-compatible API]
            |
-           +--- use_opencode=True  ---> run_agent_opencode()  [opencode CLI]
-                                         Uses text-based <tool_call> protocol
+           +--- use_copilot=True  ---> run_agent_copilot()  [GitHub Copilot API]
            |
-           v
+           v  (both use native OpenAI-style tool calling)
   +------------------+
-  | LLM responds     |  Either native tool_calls or <tool_call> XML in text
+  | LLM responds     |  With tool_calls in structured format
   +--------+---------+
            |
            v
@@ -52,9 +50,10 @@ User prompt (natural language)
 | `src/__init__.py` | Bundle API entry point — wires up the tool, command, and class registration |
 | `src/cmd.py` | Registers the `chimerallm` CLI command; opens the tool window and optionally queues a prompt |
 | `src/tool.py` | Qt-based chat UI (`ChimeraLLMTool`), settings dialog, and `_AgentWorker` thread |
-| `src/agent.py` | Agent loop logic for both backends, tool definitions, opencode subprocess helpers, tool-call parser |
-| `src/settings.py` | Persistent settings via ChimeraX `Settings` class (API key, model, endpoint, opencode toggle, etc.) |
-| `src/system_prompt.py` | System prompt: role definition + ChimeraX command reference sent to the LLM |
+| `src/agent.py` | Agent loop logic for both backends, tool definitions, Copilot model list |
+| `src/copilot_auth.py` | GitHub Copilot OAuth authentication: token reading, device-flow login, token storage |
+| `src/settings.py` | Persistent settings via ChimeraX `Settings` class (API key, model, endpoint, Copilot toggle, etc.) |
+| `src/system_prompt.py` | Comprehensive system prompt: role definition + full ChimeraX command reference (~640 lines) |
 
 ## Two backends
 
@@ -65,15 +64,25 @@ User prompt (natural language)
 - LLM returns structured `tool_calls` — parsed and executed in a loop
 - Supports temperature, model selection, and API key configuration
 
-### 2. opencode CLI (`run_agent_opencode`)
+### 2. GitHub Copilot (`run_agent_copilot`)
 
-- Invokes `opencode run --model <model> --format json` via subprocess
-- Uses session IDs (`--session`) for multi-turn conversation continuity
-- Since opencode doesn't support native function-calling, the system prompt is augmented with `_OPENCODE_TOOL_INSTRUCTIONS` that teach the LLM a text-based `<tool_call>` protocol
-- `_parse_tool_calls()` extracts tool calls with a lenient 2-tier parser:
-  1. Regex match on `<tool_call>...</tool_call>` (tolerates mangled closing tags like `</minimax:tool_call>`)
-  2. Fallback: finds bare `{"name": "known_tool", ...}` JSON blobs via brace-depth matching
-- Models are fetched dynamically via `opencode models` for the settings dropdown
+- Uses the `openai` Python SDK pointed at `https://api.githubcopilot.com`
+- Same native tool-calling protocol as the API backend (no text-based workarounds)
+- Authenticates with a GitHub OAuth token obtained via device flow
+- Token is read from `~/.local/share/opencode/auth.json` (shared with opencode) or obtained via the built-in "Login with GitHub" button
+- Copilot billing: uses your GitHub Copilot subscription's premium request allowance
+
+### Copilot authentication flow
+
+```
+1. User clicks "Login with GitHub" in Settings
+2. Plugin calls GitHub device code endpoint (POST github.com/login/device/code)
+   -> Returns: verification_uri, user_code, device_code
+3. User opens URL in browser and enters code
+4. Plugin polls github.com/login/oauth/access_token until authorized
+5. OAuth token saved to ~/.local/share/opencode/auth.json
+6. Token used as Bearer token for api.githubcopilot.com requests
+```
 
 ## Threading model
 
@@ -94,6 +103,6 @@ Stored via ChimeraX's `Settings` framework (auto-persisted to disk):
 | `model` | `"gpt-4o"` | For API backend |
 | `temperature` | `0.2` | For API backend |
 | `api_base_url` | `""` | Empty = OpenRouter |
-| `use_opencode` | `False` | Toggle between API and opencode backends |
-| `opencode_model` | `"github-copilot/claude-sonnet-4"` | For opencode backend |
+| `use_copilot` | `False` | Toggle between API and Copilot backends |
+| `copilot_model` | `"gpt-4o"` | For Copilot backend |
 | `max_iterations` | `10` | Shared — max tool-calling rounds per user message |
