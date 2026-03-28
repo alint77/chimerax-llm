@@ -12,6 +12,57 @@ from typing import Any, Callable, Dict, List, Optional
 
 from chimerallm.system_prompt import SYSTEM_PROMPT
 
+
+def _log_llm_request(
+    session,
+    *,
+    model: str,
+    via_opencode: bool,
+    this_call_chars: int,
+    seed_with_system_chars: Optional[int] = None,
+) -> None:
+    """Log each outbound LLM request with model, route, and context size estimates.
+
+    * API route: ``this_call_chars`` is the JSON size of messages (includes system prompt).
+    * opencode route: ``this_call_chars`` is the string length sent this subprocess call;
+      ``seed_with_system_chars`` is ``len(initial_prompt)`` (system prompt + tool protocol
+      + user transcript) so logs stay meaningful when later rounds only send short continuations.
+
+    The agent runs on a worker thread; ChimeraX's logger/GUI is not thread-safe, so we
+    marshal logging onto the UI thread via session.ui.thread_safe when in GUI mode.
+    """
+    route = "opencode" if via_opencode else "api"
+    if seed_with_system_chars is not None:
+        msg = (
+            "ChimeraLLM LLM request: model=%s route=%s this_call_chars=%d "
+            "full_seed_with_system_chars=%d"
+            % (model, route, this_call_chars, seed_with_system_chars)
+        )
+    else:
+        msg = (
+            "ChimeraLLM LLM request: model=%s route=%s request_chars=%d "
+            "(serialized messages including system prompt)"
+            % (model, route, this_call_chars)
+        )
+
+    def _do_log():
+        session.logger.info(msg)
+
+    try:
+        ui = getattr(session, "ui", None)
+        if ui is not None and getattr(ui, "is_gui", False) and hasattr(ui, "thread_safe"):
+            ui.thread_safe(_do_log)
+        else:
+            _do_log()
+    except Exception:
+        pass
+
+
+def _messages_context_chars(messages: List[Dict[str, Any]]) -> int:
+    """Serialized size of the message list (approximate context for API calls)."""
+    return len(json.dumps(messages, default=str))
+
+
 # Extra instructions appended to the system prompt when using opencode (text-based tool calling).
 _OPENCODE_TOOL_INSTRUCTIONS = """
 
@@ -174,6 +225,12 @@ def run_agent(
         if callbacks.on_iteration:
             callbacks.on_iteration(iteration)
 
+        _log_llm_request(
+            session,
+            model=model,
+            via_opencode=False,
+            this_call_chars=_messages_context_chars(messages),
+        )
         response = client.chat.completions.create(
             model=model,
             messages=messages,
@@ -240,6 +297,12 @@ def run_agent(
             "role": "user",
             "content": "Stop calling tools. Briefly summarize what was done and what may still be needed.",
         }
+    )
+    _log_llm_request(
+        session,
+        model=model,
+        via_opencode=False,
+        this_call_chars=_messages_context_chars(messages),
     )
     response = client.chat.completions.create(
         model=model,
@@ -424,6 +487,13 @@ def run_agent_opencode(
         if callbacks.on_iteration:
             callbacks.on_iteration(iteration)
 
+        _log_llm_request(
+            session,
+            model=model,
+            via_opencode=True,
+            this_call_chars=len(prompt),
+            seed_with_system_chars=len(initial_prompt),
+        )
         response_text, session_id = _call_opencode(prompt, model, session_id)
 
         tool_calls = _parse_tool_calls(response_text)
@@ -463,6 +533,13 @@ def run_agent_opencode(
 
     # Max iterations exceeded – ask for summary
     summary_prompt = "Stop calling tools. Briefly summarize what was done and what may still be needed."
+    _log_llm_request(
+        session,
+        model=model,
+        via_opencode=True,
+        this_call_chars=len(summary_prompt),
+        seed_with_system_chars=len(initial_prompt),
+    )
     response_text, _ = _call_opencode(summary_prompt, model, session_id)
     final_text = _strip_tool_calls(response_text) or response_text
     api_messages.append({"role": "assistant", "content": final_text})

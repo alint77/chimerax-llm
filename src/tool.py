@@ -6,6 +6,7 @@ import threading
 import html
 
 from Qt.QtCore import QObject, Qt, QThread, Signal
+from Qt.QtGui import QTextCursor  # noqa: F401 – used by _append_html if needed later
 from Qt.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
@@ -18,7 +19,6 @@ from Qt.QtWidgets import (
     QFormLayout,
     QDoubleSpinBox,
     QSpinBox,
-    QToolButton,
     QCheckBox,
     QComboBox,
     QGroupBox,
@@ -59,7 +59,8 @@ class ChimeraLLMTool(ToolInstance):
         self._qt.agent_finished.connect(self._on_agent_finished, Qt.ConnectionType.QueuedConnection)
         self._qt.agent_failed.connect(self._on_agent_failed, Qt.ConnectionType.QueuedConnection)
 
-        self._settings = get_settings(session)
+        # Not named _settings: ChimeraX ToolInstance may use _settings for the tool name (str).
+        self._prefs = get_settings(session)
         self._agent_worker = None  # must retain QThread until finished (see _send_message)
 
         self.tool_window = MainToolWindow(self)
@@ -82,11 +83,12 @@ class ChimeraLLMTool(ToolInstance):
         layout.setContentsMargins(4, 4, 4, 4)
 
         top = QHBoxLayout()
-        title = QLabel("Natural language → ChimeraX commands (LLM)")
-        top.addWidget(title)
         top.addStretch()
-        settings_btn = QToolButton()
-        settings_btn.setText("Settings")
+        clear_btn = QPushButton("Clear")
+        clear_btn.setToolTip("Clear the transcript and LLM conversation context")
+        clear_btn.clicked.connect(lambda: self._clear_chat())
+        top.addWidget(clear_btn)
+        settings_btn = QPushButton("Settings")
         settings_btn.clicked.connect(self._open_settings)
         top.addWidget(settings_btn)
         layout.addLayout(top)
@@ -94,7 +96,7 @@ class ChimeraLLMTool(ToolInstance):
         self.chat_view = QTextEdit()
         self.chat_view.setReadOnly(True)
         self.chat_view.setAcceptRichText(True)
-        self.chat_view.setMinimumHeight(280)
+        self.chat_view.setMinimumHeight(200)
         layout.addWidget(self.chat_view, stretch=1)
 
         row = QHBoxLayout()
@@ -115,12 +117,12 @@ class ChimeraLLMTool(ToolInstance):
         from Qt.QtGui import QAction
 
         clear = QAction("Clear chat", menu)
-        clear.triggered.connect(self._clear_chat)
+        clear.triggered.connect(lambda: self._clear_chat())
         menu.addAction(clear)
 
     def _clear_chat(self):
-        self.chat_view.clear()
         self._api_messages.clear()
+        self.chat_view.clear()
 
     def _append_html(self, html_snippet: str):
         self.chat_view.append(html_snippet)
@@ -129,22 +131,19 @@ class ChimeraLLMTool(ToolInstance):
 
     def _fmt_user(self, text: str) -> str:
         esc = html.escape(text)
-        return f'<p style="background:#e8f4fc;padding:6px;border-radius:6px;"><b>You:</b><br/>{esc}</p>'
+        return f'<p><b>You:</b><br/>{esc}</p>'
 
     def _fmt_assistant(self, text: str) -> str:
         esc = html.escape(text)
-        return f'<p style="background:#f0f0f0;padding:6px;border-radius:6px;"><b>Assistant:</b><br/>{esc}</p>'
+        return f'<p><b>Assistant:</b><br/>{esc}</p>'
 
     def _fmt_cmd(self, cmd: str, result: str) -> str:
         c = html.escape(cmd)
         r = html.escape(result[:4000])
-        return (
-            f'<p style="font-family:monospace;font-size:11px;background:#fff8e6;padding:4px;">'
-            f"<b>Command:</b> <code>{c}</code><br/><b>Result:</b> {r}</p>"
-        )
+        return f'<p><b>Command:</b> <code>{c}</code><br/><b>Result:</b> {r}</p>'
 
     def _fmt_note(self, text: str) -> str:
-        return f'<p style="color:#555;"><i>{html.escape(text)}</i></p>'
+        return f'<p><i>{html.escape(text)}</i></p>'
 
     def _on_command_request(self, cmd: str, callback):
         try:
@@ -207,7 +206,7 @@ class ChimeraLLMTool(ToolInstance):
         self._append_html(self._fmt_assistant(reply))
 
     def _on_agent_failed(self, err: str):
-        self._append_html(f'<p style="color:#a00;"><b>Error:</b> {html.escape(err)}</p>')
+        self._append_html(f'<p><b>Error:</b> {html.escape(err)}</p>')
 
     def _open_settings(self):
         dlg = QDialog(self.tool_window.ui_area)
@@ -219,14 +218,14 @@ class ChimeraLLMTool(ToolInstance):
         oc_layout = QFormLayout(oc_group)
 
         oc_check = QCheckBox("Use opencode instead of API")
-        oc_check.setChecked(bool(self._settings.use_opencode))
+        oc_check.setChecked(bool(self._prefs.use_opencode))
         oc_layout.addRow(oc_check)
 
         oc_model_combo = QComboBox()
         oc_model_combo.setEditable(True)
         oc_model_combo.setMinimumWidth(300)
         # Populate with models from opencode CLI
-        saved_oc_model = self._settings.opencode_model or "github-copilot/claude-sonnet-4"
+        saved_oc_model = self._prefs.opencode_model or "github-copilot/claude-sonnet-4"
         oc_model_combo.addItem(saved_oc_model)
         oc_model_combo.setCurrentText(saved_oc_model)
         oc_layout.addRow("opencode model:", oc_model_combo)
@@ -253,23 +252,23 @@ class ChimeraLLMTool(ToolInstance):
         api_layout = QFormLayout(api_group)
 
         url_edit = QLineEdit()
-        url_edit.setText(self._settings.api_base_url or "")
+        url_edit.setText(self._prefs.api_base_url or "")
         url_edit.setPlaceholderText("https://openrouter.ai/api/v1")
         api_layout.addRow("API endpoint URL:", url_edit)
 
         key_edit = QLineEdit()
         key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        key_edit.setText(self._settings.api_key or "")
+        key_edit.setText(self._prefs.api_key or "")
         api_layout.addRow("API key:", key_edit)
 
         model_edit = QLineEdit()
-        model_edit.setText(self._settings.model or "gpt-4o")
+        model_edit.setText(self._prefs.model or "gpt-4o")
         api_layout.addRow("Model:", model_edit)
 
         temp = QDoubleSpinBox()
         temp.setRange(0.0, 2.0)
         temp.setSingleStep(0.1)
-        temp.setValue(float(self._settings.temperature))
+        temp.setValue(float(self._prefs.temperature))
         api_layout.addRow("Temperature:", temp)
 
         form.addRow(api_group)
@@ -277,7 +276,7 @@ class ChimeraLLMTool(ToolInstance):
         # --- Shared settings ---
         iters = QSpinBox()
         iters.setRange(1, 50)
-        iters.setValue(int(self._settings.max_iterations))
+        iters.setValue(int(self._prefs.max_iterations))
         form.addRow("Max iterations:", iters)
 
         # Toggle API group enabled based on opencode checkbox
@@ -297,14 +296,14 @@ class ChimeraLLMTool(ToolInstance):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
-        self._settings.use_opencode = oc_check.isChecked()
-        self._settings.opencode_model = oc_model_combo.currentText().strip() or "github-copilot/claude-sonnet-4"
-        self._settings.api_base_url = url_edit.text().strip()
-        self._settings.model = model_edit.text().strip() or "gpt-4o"
-        self._settings.temperature = float(temp.value())
-        self._settings.max_iterations = int(iters.value())
-        self._settings.api_key = key_edit.text().strip()
-        self._settings.save()
+        self._prefs.use_opencode = oc_check.isChecked()
+        self._prefs.opencode_model = oc_model_combo.currentText().strip() or "github-copilot/claude-sonnet-4"
+        self._prefs.api_base_url = url_edit.text().strip()
+        self._prefs.model = model_edit.text().strip() or "gpt-4o"
+        self._prefs.temperature = float(temp.value())
+        self._prefs.max_iterations = int(iters.value())
+        self._prefs.api_key = key_edit.text().strip()
+        self._prefs.save()
         self.session.logger.info("ChimeraLLM settings saved.")
 
     def delete(self):
@@ -365,18 +364,18 @@ class _AgentWorker(QThread):
                 log_message=log_ui,
             )
 
-            if self._tool._settings.use_opencode:
+            if self._tool._prefs.use_opencode:
                 reply = agent_mod.run_agent_opencode(
                     self._tool.session,
                     self._tool._api_messages,
-                    self._tool._settings,
+                    self._tool._prefs,
                     callbacks,
                 )
             else:
                 reply = agent_mod.run_agent(
                     self._tool.session,
                     self._tool._api_messages,
-                    self._tool._settings,
+                    self._tool._prefs,
                     callbacks,
                 )
             self._tool._qt.agent_finished.emit(reply or "")

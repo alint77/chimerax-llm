@@ -26,6 +26,8 @@ class ChimeraLLMSettings(Settings):
 
 def get_settings(session):
     """Return the settings object for this session."""
-    if not hasattr(session, "_chimerallm_settings"):
-        session._chimerallm_settings = ChimeraLLMSettings(session)
-    return session._chimerallm_settings
+    s = getattr(session, "_chimerallm_settings", None)
+    if not isinstance(s, ChimeraLLMSettings):
+        s = ChimeraLLMSettings(session)
+        session._chimerallm_settings = s
+    return s
